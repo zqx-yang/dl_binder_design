@@ -1,11 +1,18 @@
 # dl_binder_design
 
+> **This is a fork** of [WEHI-ResearchComputing/dl_binder_design](https://github.com/WEHI-ResearchComputing/dl_binder_design)
+> at commit [`ab173bc`](https://github.com/WEHI-ResearchComputing/dl_binder_design/commit/ab173bcd918d47d70145af492451c90dfc10c27d)
+> (itself a fork of [nrbennet/dl_binder_design](https://github.com/nrbennet/dl_binder_design)). The original README follows below this section.
+> Changes are listed here and in the git history (`git log ab173bc..HEAD`); to see exactly what changed in a file, run e.g. `git diff ab173bc -- af2_initial_guess/predict.py`, and `git show ab173bc:<path>` gives the upstream file. MIT licence unchanged.
+
 This repo contains the scripts described in the paper [Improving de novo Protein Binder Design with Deep Learning](https://www.nature.com/articles/s41467-023-38328-5).
 
 ![forgithub](https://github.com/nrbennet/dl_binder_design/assets/56419265/4c5d6a05-d2fb-4c7b-b1e0-0c743b2114eb)
 
 # Table of Contents
 
+* [Changes in this fork](#changes)
+  * [Score file columns](#scorefile)
 * [Third Party Source Code](#sourcecode)
 * [Setup](#setup0)
   * [Conda Environment](#setup1)
@@ -20,7 +27,58 @@ This repo contains the scripts described in the paper [Improving de novo Protein
     * [Running ProteinMPNN with Fixed Residues](#inf2)
   * [AlphaFold2 Complex Prediction](#inf3)
 * [Troubleshooting](#trb0)
+* [Credits](#credits)
 
+# Changes in this fork <a name="changes"></a>
+
+| File | Change |
+|-|-|
+| `af2_initial_guess/predict_ipsae_multitarget.py` (new) | Same prediction as `predict.py`, plus ipSAE scoring in both directions, any number of target chains, and selection of the binder and target chains by chain ID (`-binder_chain`, `-target_chains`). Ligands, waters and other HETATM/CONECT records in PDB inputs are ignored (`-ignore_ligands`). Chain IDs and residue numbers of the input are kept on the output PDB. Reruns with `-pdbdir` skip structures that are already finished. Other options: `-sort_by_length`, `-checkpoint_failures`, `-strict_binder_check`. Details and the score file columns are below. |
+| `af2_initial_guess/predict.py` (modified) | The first target residue is now part of the template (upstream leaves it out: `i > binderlen` is now `i >= binderlen`), so scores differ slightly from upstream. Complexes with more than two chains are accepted: the first chain is the binder, the rest is the target (the output PDB merges the target chains; `predict_ipsae_multitarget.py` keeps them). A failed structure prints the error type, message and traceback. |
+| `include/af2_binder_design.yml` (modified) | Pinned to Python 3.10, JAX / jaxlib 0.4.20 (cuda12.cudnn89), dm-haiku 0.0.11, dm-tree 0.1.9, TensorFlow 2.15.1, ml-dtypes 0.3.2. |
+| `include/af2_binder_design2.yml` (new) | As above, plus CUDA 12.4 user-space libraries (nvcc, runtime, nvrtc, cupti, cuDNN 8.9), so that XLA uses a `ptxas` that matches NVIDIA drivers supporting CUDA 12.4. These are the pins of the environment we run; creating an environment from this file alone has not been tested. PyRosetta needs its own licence and conda channel. |
+| `helper_scripts/rmvlig.py` (new) | Copies a folder of PDBs (recursively, keeping sub-folders) while dropping `HETATM` and `CONECT` lines, for when you want cleaned copies on disk. dl_binder_design has no ligand handling (the only HETATM record it converts is MSE). `predict_ipsae_multitarget.py` ignores these records itself, so cleaning is not needed. This script also removes MSE residues. |
+| `slurm/` (new) | Example Slurm job script and wrapper that we use on our cluster: input check, length-sorted batches, resume, chain selection, score file naming. See `slurm/README.md`. |
+
+## Using `predict_ipsae_multitarget.py`
+
+Use the AF2 environment (`include/af2_binder_design2.yml`, see Setup below for PyRosetta and the weights).
+```bash
+# binder = chain A, scored against chains B and C; any other chain in the files is dropped
+python af2_initial_guess/predict_ipsae_multitarget.py -pdbdir inputs/ -outpdbdir outputs/ \
+       -binder_chain A -target_chains B,C -calc_ipsae true -ipsae_cutoff 10 -scorefilename scores.csv
+# without the chain options: binder = first chain of the first file, targets = all other chains found in the inputs
+```
+- Inputs are PDB files (ATOM records of the first model). The binder may sit anywhere in a file; it is moved to the front before prediction. With `-silent` instead of `-pdbdir`, the binder must already be the first chain, both chain options are required and no other chains may be present.
+- `-strict_binder_check` (default true) rejects a structure whose binder is split into several blocks, i.e. a `TER` record or another chain between its atoms.
+- If residue numbers repeat across chains (binder 1-80, target 1-150), the structure is renumbered internally for AF2; the output PDB gets your numbers back. Chain IDs are never renamed.
+- True/false options take the words `true` / `false` (`-calc_ipsae` is `false` unless you set it).
+
+## Score file columns <a name="scorefile"></a>
+
+One row per structure is appended to `-scorefilename`. The default `out.sc` has the Rosetta-style `SCORE:` format; a name ending in `.csv` or `.tsv` writes a comma / tab separated table instead (first column `description`), which is easier to read in a spreadsheet or pandas. A file that already exists must have the same columns, otherwise the script stops before predicting anything (use another file name).
+
+Column names follow the chain IDs of your input: with binder chain `B` and target chain `X`, "BX" means *residues of B scored against X* (the first letter is the chain whose residues are scored, as in Dunbrack's `ipsae.py`). The columns are decided once per run, from `-binder_chain` / `-target_chains` or, by default, from the files in `-pdbdir`. Any number of targets works. Columns in file order, for binder A and targets B, C, D:
+
+| Column(s) | Meaning |
+|-|-|
+| `binder_chain`, `target_chains` | chain IDs used for this structure (e.g. `A`, `B,C,D`) |
+| `ipSAE_AB`, `ipSAE_BA`, `ipSAE_AB_max`, then `ipSAE_AC`, `ipSAE_CA`, `ipSAE_AC_max`, `ipSAE_AD`, ... | per target: ipSAE of the binder residues against the target (`AB`), of the target residues against the binder (`BA`), and the larger of the two (`_max`, the `max` value of `ipsae.py`) |
+| `iPAE_AB`, `iPAE_AC`, `iPAE_AD`, ... | per target: mean inter-chain PAE of the binder-target pair, both directions averaged (for one target this is upstream's `pae_interaction`) |
+| `n_iface_AB`, `n_iface_BA`, `n_iface_AC`, `n_iface_CA`, ... | per target, both directions: number of residues of the first-named chain that have at least one partner residue with PAE below `-ipsae_cutoff` (0 = no interface) |
+| `plddt_total`, `plddt_binder`, `plddt_B`, `plddt_C`, ..., `plddt_target` | mean pLDDT of everything, of the binder, of each target, of all targets together |
+| `pae_binder`, `pae_B`, `pae_C`, ..., `pae_target`, `pae_cross_targets` | mean PAE within the binder, within each target, within all targets together (including the target-target blocks), and between different targets (targets are not pre-associated, so high values are expected; `nan` with one target) |
+| `binder_aligned_rmsd`, `target_aligned_rmsd` | RMSD of the prediction to the input after aligning on the binder / on the target |
+| `target_drift_rmsd` | change of the arrangement of the first two targets between input and prediction (`nan` with one target) |
+| `n_targets` | number of target chains in this structure |
+| `time` | seconds spent on this structure |
+| `description` | tag of the structure (`<input name>_af2pred`); first column in `.csv`/`.tsv`, last in `.sc` |
+
+- The ipSAE and `n_iface` columns are `nan` unless `-calc_ipsae true`.
+- A target that a structure lacks gives `nan` in all its columns. This applies when the targets are derived from the inputs (no `-target_chains`) or with `-allow_missing_targets`; with an explicit `-target_chains`, every input must contain all of them, otherwise that structure fails.
+- With one target only the `AB` columns are filled; `AC`, `AD`, ... exist only if more targets are in the column layout. Binder `H` with targets `L` and `M` gives `ipSAE_HL`, `ipSAE_LH`, `ipSAE_HL_max`, `ipSAE_HM`, `ipSAE_MH`, `ipSAE_HM_max`.
+- Derived targets depend on the files in `-pdbdir`: two runs on different subsets can give different columns, and the second is refused. Pass `-binder_chain` / `-target_chains` explicitly, or use the Slurm wrapper, which fixes the chains for the whole run.
+- Run one process per score file; there is no locking.
 
 ## Third Party Source Code <a name="sourcecode"></a>
 This repository provides a copy of Brian Coventry's silent tools, these tools are also provided [here](https://github.com/bcov77/silent_tools). This repository provides a wrapper to [Justas' ProteinMPNN code](https://github.com/dauparas/ProteinMPNN) and some of the code in the wrapper class is adapted directly from ProteinMPNN code. Finally, this repository provides a version of the AlphaFold2 source code with the "initial guess" modifications described in [this paper](https://www.nature.com/articles/s41467-023-38328-5). The AF2 source code is provided with the original DeepMind license at the top of each file.
@@ -154,5 +212,10 @@ Where SAMETAG and EXCEPTION can be many different things. What is happening here
 
 If you hit this error, I recommend running the same command that yielded the error but while adding the `-debug` flag to the command. This flag will make the script run without the try-catch block and errors will print with the standard verbose, easier-to-debug messages.
 
-
+# Credits <a name="credits"></a>
+* dl_binder_design: Bennett NR, et al. *Improving de novo protein binder design with deep learning.* Nat Commun 14, 2625 (2023). https://doi.org/10.1038/s41467-023-38328-5
+* ProteinMPNN: Dauparas J, et al. Science 378, 49 (2022). https://doi.org/10.1126/science.add2187
+* AlphaFold2: Jumper J, et al. Nature 596, 583 (2021). https://doi.org/10.1038/s41586-021-03819-2
+* ipSAE: Dunbrack RL. *Rēs ipSAE loquuntur: What's wrong with AlphaFold's ipTM score and how to fix it.* bioRxiv 2025. https://doi.org/10.1101/2025.02.10.637595 ; reference implementation https://github.com/DunbrackLab/IPSAE (MIT). The ipSAE code here is an independent numpy re-implementation of the by-residue d0 variant.
+* WEHI-ResearchComputing for the maintained fork this is based on (conda-lock files, FastRelax multi-sequence script, install fixes).
 
