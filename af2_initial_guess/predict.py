@@ -132,7 +132,7 @@ class AF2_runner():
             feat_holder.residue_mask = [False for i in range(len(feat_holder.seq))]
         else:
             # For interfaces fix the target and predict the binder
-            feat_holder.residue_mask = [int(i) > feat_holder.binderlen for i in range(len(feat_holder.seq))]
+            feat_holder.residue_mask = [int(i) >= feat_holder.binderlen for i in range(len(feat_holder.seq))]
 
         template_dict = af2_util.generate_template_features(
                                                             feat_holder.seq,
@@ -504,20 +504,18 @@ class StructManager():
 
         # Determine whether we are working with a monomer or a complex
         splits = pose.split_by_chain()
-        if len(splits) > 2:
-            raise Exception( f"Pose {tag} has more than two chains. This is not supported by this script." )
 
-        elif len(splits) < 1:
+        if len(splits) < 1:
             raise Exception( f"Pose {tag} is empty. This is not supported by this script." )
 
         elif len(splits) == 1:
             monomer   = True
             binderlen = -1
 
-        elif len(splits) == 2:
+        elif len(splits) > 1:
             if self.force_monomer:
                 print( "/" * 60 ) 
-                print( f"Pose {tag} has two chains. But force_monomer is set to True. Treating as monomer.")
+                print( f"Pose {tag} has multiple chains. But force_monomer is set to True. Treating as monomer.")
                 print( f"I am going to assume that the first chain is the binder and that is the chain I will predict")
                 print( "/" * 60 ) 
 
@@ -564,9 +562,14 @@ for pdb in struct_manager.iterate():
 
         except KeyboardInterrupt: sys.exit( "Script killed by Control+C, exiting" )
 
-        except:
+        except Exception as e:
             seconds = int(timer() - t0)
-            print( "Struct with tag %s failed in %i seconds with error: %s"%( pdb, seconds, sys.exc_info()[0] ) )
+            print(f"Struct with tag {pdb} failed in {seconds} seconds")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            print("\n" + "="*80 + "\n")
 
     # We are done with one pdb, record that we finished
     struct_manager.record_checkpoint(pdb)
