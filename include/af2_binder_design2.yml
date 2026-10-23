@@ -1,0 +1,40 @@
+name: af2_binder_design2
+channels:
+  - https://conda.rosettacommons.org
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+
+dependencies:
+  - python=3.10
+  - biopython
+  - ml-collections
+  - pip
+  - pyrosetta
+  - mock
+
+  - pip:
+      - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+      # JAX
+      - jax[cuda12_pip]==0.4.20
+      - jaxlib==0.4.20+cuda12.cudnn89
+
+      # Haiku (used by the AF2 code)
+      - dm-haiku==0.0.11
+      - dm-tree==0.1.9
+
+      # TensorFlow and a compatible ml-dtypes
+      - tensorflow==2.15.1
+      - ml-dtypes==0.3.2
+
+      # CUDA 12.4 user-space libraries (incl. ptxas), matching an NVIDIA driver that supports CUDA 12.4.
+      # Pinned to 12.4.* so XLA does not pick up a newer ptxas than the driver supports.
+      - nvidia-cuda-nvcc-cu12==12.4.*
+      - nvidia-cuda-runtime-cu12==12.4.*
+      - nvidia-cuda-nvrtc-cu12==12.4.*
+      - nvidia-cuda-cupti-cu12==12.4.*
+
+      # cuDNN 8.9, as expected by jaxlib ...cudnn89
+      - nvidia-cudnn-cu12==8.9.*

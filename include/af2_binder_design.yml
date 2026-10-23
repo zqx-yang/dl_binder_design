@@ -1,23 +1,31 @@
 name: af2_binder_design
 channels:
+  - https://conda.rosettacommons.org
+  - conda-forge
   - pytorch
   - nvidia
-  - conda-forge
   - defaults
-  - https://conda.rosettacommons.org
 
 dependencies:
-  - python=3.11
+  - python=3.10
   - biopython
   - ml-collections
-  - ml_dtypes
-  - tensorflow
   - pip
   - pyrosetta
   - mock
   - pip:
-    - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html 
-    - jax[cuda12_pip]==0.4.20
-    - jaxlib
-    - dm-haiku
-    - dm-tree
+      - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+      # You requested this:
+      - jax[cuda12_pip]==0.4.20
+
+      # Hard pin jaxlib to match 0.4.20 CUDA12 build (prevents pip upgrading to 0.6.x)
+      - jaxlib==0.4.20+cuda12.cudnn89
+
+      # Haiku stack pinned for AF2-style code
+      - dm-haiku==0.0.11
+      - dm-tree==0.1.9
+
+      # TensorFlow + compatible ml-dtypes
+      - tensorflow==2.15.1
+      - ml-dtypes==0.3.2
